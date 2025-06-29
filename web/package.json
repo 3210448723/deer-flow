@@ -6,14 +6,14 @@
   "scripts": {
     "build": "next build",
     "check": "next lint && tsc --noEmit",
-    "dev": "dotenv -e ../.env -- next dev --turbo",
-    "scan": "next dev & npx react-scan@latest localhost:3000",
+    "dev": "dotenv -e ../.env -- next dev --turbo -p 3090",
+    "scan": "next dev & npx react-scan@latest localhost:3090",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
     "format:write": "prettier --write \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
     "lint": "next lint",
     "lint:fix": "next lint --fix",
     "preview": "next build && next start",
-    "start": "next start",
+    "start": "next start -p 3090",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
