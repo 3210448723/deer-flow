@@ -1,6 +1,10 @@
 # Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: MIT
 
+# 本文件定义了流程图中各个节点的实现，包括规划、研究、报告等核心功能节点。
+# 每个节点函数负责处理特定的任务，并根据状态和配置进行分支和数据流转。
+# 主要节点包括：coordinator、planner、researcher、coder、reporter等。
+
 import json
 import logging
 import os
@@ -35,26 +39,32 @@ logger = logging.getLogger(__name__)
 
 
 @tool
+# 工具函数：用于将任务交给planner节点处理。
 def handoff_to_planner(
     research_topic: Annotated[str, "The topic of the research task to be handed off."],
     locale: Annotated[str, "The user's detected language locale (e.g., en-US, zh-CN)."],
 ):
     """Handoff to planner agent to do plan."""
-    # This tool is not returning anything: we're just using it
-    # as a way for LLM to signal that it needs to hand off to planner agent
+    # 该工具本身不返回内容，仅作为LLM信号，指示需要切换到planner节点
     return
 
 
+# 背景调研节点：根据用户查询进行网络检索，获取背景信息
+# 输入：state（包含research_topic）、config
+# 输出：background_investigation_results（检索结果）
 def background_investigation_node(state: State, config: RunnableConfig):
     logger.info("background investigation node is running.")
+    # 从config中提取可配置参数
     configurable = Configuration.from_runnable_config(config)
     query = state.get("research_topic")
     background_investigation_results = None
+    # 根据配置选择不同的搜索引擎
     if SELECTED_SEARCH_ENGINE == SearchEngine.TAVILY.value:
         searched_content = LoggedTavilySearch(
             max_results=configurable.max_search_results
         ).invoke(query)
         if isinstance(searched_content, list):
+            # 格式化搜索结果
             background_investigation_results = [
                 f"## {elem['title']}\n\n{elem['content']}" for elem in searched_content
             ]
@@ -71,6 +81,7 @@ def background_investigation_node(state: State, config: RunnableConfig):
         background_investigation_results = get_web_search_tool(
             configurable.max_search_results
         ).invoke(query)
+    # 兜底返回，结果转为json字符串
     return {
         "background_investigation_results": json.dumps(
             background_investigation_results, ensure_ascii=False
@@ -78,15 +89,20 @@ def background_investigation_node(state: State, config: RunnableConfig):
     }
 
 
+# 规划节点：生成完整的研究计划
+# 输入：state（包含plan_iterations、enable_background_investigation等）、config
+# 输出：Command，指示下一个节点（human_feedback或reporter）
 def planner_node(
     state: State, config: RunnableConfig
 ) -> Command[Literal["human_feedback", "reporter"]]:
     """Planner node that generate the full plan."""
+    # 中文注释：该节点负责根据当前状态和配置，生成研究计划，并根据计划内容决定后续流程。
     logger.info("Planner generating full plan")
     configurable = Configuration.from_runnable_config(config)
     plan_iterations = state["plan_iterations"] if state.get("plan_iterations", 0) else 0
     messages = apply_prompt_template("planner", state, configurable)
 
+    # 如果启用背景调研且有结果，将其加入消息上下文
     if state.get("enable_background_investigation") and state.get(
         "background_investigation_results"
     ):
@@ -101,6 +117,7 @@ def planner_node(
             }
         ]
 
+    # 根据配置选择不同的LLM类型
     if configurable.enable_deep_thinking:
         llm = get_llm_by_type("reasoning")
     elif AGENT_LLM_MAP["planner"] == "basic":
@@ -111,11 +128,12 @@ def planner_node(
     else:
         llm = get_llm_by_type(AGENT_LLM_MAP["planner"])
 
-    # if the plan iterations is greater than the max plan iterations, return the reporter node
+    # 超过最大规划轮数，直接跳转到reporter节点
     if plan_iterations >= configurable.max_plan_iterations:
         return Command(goto="reporter")
 
     full_response = ""
+    # basic模式下直接invoke，否则采用流式输出
     if AGENT_LLM_MAP["planner"] == "basic" and not configurable.enable_deep_thinking:
         response = llm.invoke(messages)
         full_response = response.model_dump_json(indent=4, exclude_none=True)
@@ -126,6 +144,7 @@ def planner_node(
     logger.debug(f"Current state messages: {state['messages']}")
     logger.info(f"Planner response: {full_response}")
 
+    # 尝试解析为JSON计划
     try:
         curr_plan = json.loads(repair_json_output(full_response))
     except json.JSONDecodeError:
@@ -134,6 +153,7 @@ def planner_node(
             return Command(goto="reporter")
         else:
             return Command(goto="__end__")
+    # 如果计划已具备足够上下文，直接进入reporter
     if curr_plan.get("has_enough_context"):
         logger.info("Planner response has enough context.")
         new_plan = Plan.model_validate(curr_plan)
@@ -144,6 +164,7 @@ def planner_node(
             },
             goto="reporter",
         )
+    # 否则进入人工反馈环节
     return Command(
         update={
             "messages": [AIMessage(content=full_response, name="planner")],
@@ -153,16 +174,23 @@ def planner_node(
     )
 
 
+# 人工反馈节点：用户审核计划，决定是否修改或接受
+# 输入：state（包含current_plan、auto_accepted_plan等）
+# 输出：Command，指示下一个节点
+# 主要分支：
+#   - [EDIT_PLAN]：回到planner
+#   - [ACCEPTED]：进入research_team或reporter
+#   - 其他：抛出异常
 def human_feedback_node(
     state,
 ) -> Command[Literal["planner", "research_team", "reporter", "__end__"]]:
     current_plan = state.get("current_plan", "")
-    # check if the plan is auto accepted
+    # 检查计划是否自动接受
     auto_accepted_plan = state.get("auto_accepted_plan", False)
     if not auto_accepted_plan:
         feedback = interrupt("Please Review the Plan.")
 
-        # if the feedback is not accepted, return the planner node
+        # 用户要求修改计划，回到planner
         if feedback and str(feedback).upper().startswith("[EDIT_PLAN]"):
             return Command(
                 update={
@@ -172,19 +200,20 @@ def human_feedback_node(
                 },
                 goto="planner",
             )
+        # 用户接受计划
         elif feedback and str(feedback).upper().startswith("[ACCEPTED]"):
             logger.info("Plan is accepted by user.")
         else:
             raise TypeError(f"Interrupt value of {feedback} is not supported.")
 
-    # if the plan is accepted, run the following node
+    # 计划被接受，进入下一节点
     plan_iterations = state["plan_iterations"] if state.get("plan_iterations", 0) else 0
     goto = "research_team"
     try:
         current_plan = repair_json_output(current_plan)
-        # increment the plan iterations
+        # 递增计划轮数
         plan_iterations += 1
-        # parse the plan
+        # 解析计划
         new_plan = json.loads(current_plan)
         if new_plan["has_enough_context"]:
             goto = "reporter"
@@ -205,10 +234,14 @@ def human_feedback_node(
     )
 
 
+# 协调节点：与用户沟通，决定是否进入规划或背景调研
+# 输入：state、config
+# 输出：Command，更新locale、research_topic等，并决定下一个节点
 def coordinator_node(
     state: State, config: RunnableConfig
 ) -> Command[Literal["planner", "background_investigator", "__end__"]]:
     """Coordinator node that communicate with customers."""
+    # 中文注释：该节点负责与用户沟通，判断是否需要进入planner或背景调研节点
     logger.info("Coordinator talking.")
     configurable = Configuration.from_runnable_config(config)
     messages = apply_prompt_template("coordinator", state)
@@ -220,13 +253,14 @@ def coordinator_node(
     logger.debug(f"Current state messages: {state['messages']}")
 
     goto = "__end__"
-    locale = state.get("locale", "en-US")  # Default locale if not specified
+    locale = state.get("locale", "en-US")  # 默认语言
     research_topic = state.get("research_topic", "")
 
+    # 检查LLM是否调用了handoff_to_planner工具，通过是否调用工具区分是否是简单问题
     if len(response.tool_calls) > 0:
         goto = "planner"
         if state.get("enable_background_investigation"):
-            # if the search_before_planning is True, add the web search tool to the planner agent
+            # 如果需要先调研，进入background_investigator
             goto = "background_investigator"
         try:
             for tool_call in response.tool_calls:
@@ -256,8 +290,12 @@ def coordinator_node(
     )
 
 
+# 报告节点：根据当前计划和观察结果，生成最终报告
+# 输入：state（current_plan, observations等）、config
+# 输出：final_report（最终报告内容）
 def reporter_node(state: State, config: RunnableConfig):
     """Reporter node that write a final report."""
+    # 中文注释：该节点负责根据计划和研究结果，生成结构化的最终报告，强调表格和引用格式
     logger.info("Reporter write final report")
     configurable = Configuration.from_runnable_config(config)
     current_plan = state.get("current_plan")
@@ -272,7 +310,7 @@ def reporter_node(state: State, config: RunnableConfig):
     invoke_messages = apply_prompt_template("reporter", input_, configurable)
     observations = state.get("observations", [])
 
-    # Add a reminder about the new report format, citation style, and table usage
+    # 添加报告结构和引用格式的提醒
     invoke_messages.append(
         HumanMessage(
             content="IMPORTANT: Structure your report according to the format in the prompt. Remember to include:\n\n1. Key Points - A bulleted list of the most important findings\n2. Overview - A brief introduction to the topic\n3. Detailed Analysis - Organized into logical sections\n4. Survey Note (optional) - For more comprehensive reports\n5. Key Citations - List all references at the end\n\nFor citations, DO NOT include inline citations in the text. Instead, place all citations in the 'Key Citations' section at the end using the format: `- [Source Title](URL)`. Include an empty line between each citation for better readability.\n\nPRIORITIZE USING MARKDOWN TABLES for data presentation and comparison. Use tables whenever presenting comparative data, statistics, features, or options. Structure tables with clear headers and aligned columns. Example table format:\n\n| Feature | Description | Pros | Cons |\n|---------|-------------|------|------|\n| Feature 1 | Description 1 | Pros 1 | Cons 1 |\n| Feature 2 | Description 2 | Pros 2 | Cons 2 |",
@@ -295,20 +333,29 @@ def reporter_node(state: State, config: RunnableConfig):
     return {"final_report": response_content}
 
 
+# 研究团队节点：占位，实际协作逻辑可在此扩展
 def research_team_node(state: State):
     """Research team node that collaborates on tasks."""
+    # 中文注释：该节点用于多智能体协作，可根据需要扩展
     logger.info("Research team is collaborating on tasks.")
     pass
 
 
+# ----------------- 以下为异步agent执行相关辅助函数 -----------------
+
+# 执行agent单步任务的辅助函数
+# 输入：state、agent实例、agent名称
+# 输出：Command，更新messages和observations，并进入research_team
+default_recursion_limit = 25
 async def _execute_agent_step(
     state: State, agent, agent_name: str
 ) -> Command[Literal["research_team"]]:
     """Helper function to execute a step using the specified agent."""
+    # 中文注释：该函数负责执行当前计划中的一个未完成步骤，并将结果写入state
     current_plan = state.get("current_plan")
     observations = state.get("observations", [])
 
-    # Find the first unexecuted step
+    # 查找第一个未执行的步骤
     current_step = None
     completed_steps = []
     for step in current_plan.steps:
@@ -324,7 +371,7 @@ async def _execute_agent_step(
 
     logger.info(f"Executing step: {current_step.title}, agent: {agent_name}")
 
-    # Format completed steps information
+    # 格式化已完成步骤信息，便于agent参考
     completed_steps_info = ""
     if completed_steps:
         completed_steps_info = "# Existing Research Findings\n\n"
@@ -332,7 +379,7 @@ async def _execute_agent_step(
             completed_steps_info += f"## Existing Finding {i + 1}: {step.title}\n\n"
             completed_steps_info += f"<finding>\n{step.execution_res}\n</finding>\n\n"
 
-    # Prepare the input for the agent with completed steps info
+    # 构造agent输入，包含当前任务和已完成任务
     agent_input = {
         "messages": [
             HumanMessage(
@@ -341,7 +388,7 @@ async def _execute_agent_step(
         ]
     }
 
-    # Add citation reminder for researcher agent
+    # researcher节点补充资源和引用提醒
     if agent_name == "researcher":
         if state.get("resources"):
             resources_info = "**The user mentioned the following resource files:**\n\n"
@@ -363,8 +410,7 @@ async def _execute_agent_step(
             )
         )
 
-    # Invoke the agent
-    default_recursion_limit = 25
+    # 递归深度限制，防止agent死循环
     try:
         env_value_str = os.getenv("AGENT_RECURSION_LIMIT", str(default_recursion_limit))
         parsed_limit = int(env_value_str)
@@ -391,11 +437,11 @@ async def _execute_agent_step(
         input=agent_input, config={"recursion_limit": recursion_limit}
     )
 
-    # Process the result
+    # 处理agent输出，将结果写入当前步骤
     response_content = result["messages"][-1].content
     logger.debug(f"{agent_name.capitalize()} full response: {response_content}")
 
-    # Update the step with the execution result
+    # 更新步骤执行结果
     current_step.execution_res = response_content
     logger.info(f"Step '{current_step.title}' execution completed by {agent_name}")
 
@@ -413,6 +459,12 @@ async def _execute_agent_step(
     )
 
 
+# agent执行前的配置与工具加载辅助函数
+# 输入：state、config、agent_type、default_tools
+# 输出：Command，进入research_team
+# 主要逻辑：
+#   1. 根据配置加载MCP服务器和工具
+#   2. 创建agent并执行当前步骤
 async def _setup_and_execute_agent_step(
     state: State,
     config: RunnableConfig,
@@ -435,11 +487,12 @@ async def _setup_and_execute_agent_step(
     Returns:
         Command to update state and go to research_team
     """
+    # 中文注释：该函数根据配置动态加载MCP工具，创建agent并执行当前步骤
     configurable = Configuration.from_runnable_config(config)
     mcp_servers = {}
     enabled_tools = {}
 
-    # Extract MCP server configuration for this agent type
+    # 提取当前agent类型可用的MCP服务器和工具
     if configurable.mcp_settings:
         for server_name, server_config in configurable.mcp_settings["servers"].items():
             if (
@@ -454,7 +507,7 @@ async def _setup_and_execute_agent_step(
                 for tool_name in server_config["enabled_tools"]:
                     enabled_tools[tool_name] = server_name
 
-    # Create and execute agent with MCP tools if available
+    # 有MCP服务器时，加载其工具
     if mcp_servers:
         async with MultiServerMCPClient(mcp_servers) as client:
             loaded_tools = default_tools[:]
@@ -467,15 +520,19 @@ async def _setup_and_execute_agent_step(
             agent = create_agent(agent_type, agent_type, loaded_tools, agent_type)
             return await _execute_agent_step(state, agent, agent_type)
     else:
-        # Use default tools if no MCP servers are configured
+        # 没有MCP服务器时，仅用默认工具
         agent = create_agent(agent_type, agent_type, default_tools, agent_type)
         return await _execute_agent_step(state, agent, agent_type)
 
 
+# 研究员节点：负责具体研究任务
+# 输入：state、config
+# 输出：Command，进入research_team
 async def researcher_node(
     state: State, config: RunnableConfig
 ) -> Command[Literal["research_team"]]:
     """Researcher node that do research"""
+    # 中文注释：该节点为研究员agent，加载检索、爬虫等工具，执行研究任务
     logger.info("Researcher node is researching.")
     configurable = Configuration.from_runnable_config(config)
     tools = [get_web_search_tool(configurable.max_search_results), crawl_tool]
@@ -491,10 +548,14 @@ async def researcher_node(
     )
 
 
+# 程序员节点：负责代码分析任务
+# 输入：state、config
+# 输出：Command，进入research_team
 async def coder_node(
     state: State, config: RunnableConfig
 ) -> Command[Literal["research_team"]]:
     """Coder node that do code analysis."""
+    # 中文注释：该节点为程序员agent，仅加载python解释器工具，执行代码分析任务
     logger.info("Coder node is coding.")
     return await _setup_and_execute_agent_step(
         state,

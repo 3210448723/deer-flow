@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-
+# todo 如果多智能体要加这里要改
 class StepType(str, Enum):
     RESEARCH = "research"
     PROCESSING = "processing"
