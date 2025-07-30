@@ -72,6 +72,22 @@ Different types of steps have different web search requirements:
    - Mathematical calculations and analysis
    - Statistical computations and data processing
 
+3. **Steps for Handling Legal Issues (`step_type: "lawyer"`)** (`need_search: false`) - **MANDATORY FOR ALL LEGAL QUERIES**:
+   - **PRIORITY RULE**: ANY question involving legal matters MUST use `step_type: "lawyer"` instead of "research"
+   - Legal cases, court information, judgments, and case records
+   - Company registration, business licenses, and corporate legal status
+   - Law firm information, lawyer qualifications, and legal service providers
+   - Legal precedents, regulations, compliance, and statutory information
+   - Court proceedings, litigation details, and judicial decisions
+   - Legal entity verification and corporate legal relationships
+   - Using tools to obtain information by legal identifiers such as:
+     - Company names or unified social credit codes (统一社会信用代码)
+     - Case numbers or court case identifiers
+     - Law firm names or lawyer registration numbers
+     - Court names or judicial system information
+   - Any task involving legal databases, judicial systems, or legal expertise
+   - **IMPORTANT**: Legal research should ALWAYS use specialized legal tools, not general web search
+
 ## Exclusions
 
 - **No Direct Calculations in Research Steps**:
@@ -143,9 +159,22 @@ When planning information gathering, consider these key aspects and ensure COMPR
   - Create NO MORE THAN {{ max_step_num }} focused and comprehensive steps that cover the most essential aspects
   - Ensure each step is substantial and covers related information categories
   - Prioritize breadth and depth within the {{ max_step_num }}-step constraint
-  - For each step, carefully assess if web search is needed:
-    - Research and external data gathering: Set `need_search: true`
-    - Internal data processing: Set `need_search: false`
+  - For each step, carefully assess the step type and search requirements:
+    - **Legal tasks** (HIGHEST PRIORITY): Use `step_type: "lawyer"` and set `need_search: false` for:
+      - **ANY question involving legal matters, courts, cases, law firms, or legal entities**
+      - Queries about court cases, legal proceedings, or judicial decisions
+      - Company legal information, registration, or corporate legal status
+      - Law firm details, lawyer information, or legal service providers
+      - Legal precedents, regulations, compliance, or statutory matters
+      - Tasks requiring legal databases or specialized legal tools
+      - Looking up information by legal identifiers (case numbers, social credit codes, etc.)
+      - **RULE**: If the question has ANY legal component, use "lawyer" type, NOT "research"
+    - **Research tasks**: Use `step_type: "research"` and set `need_search: true` for:
+      - General web search and information gathering (NON-legal topics only)
+      - Market research, news, and public information (NON-legal topics only)
+      - **EXCLUSION**: Do NOT use for legal matters - use "lawyer" type instead
+    - **Processing tasks**: Use `step_type: "processing"` and set `need_search: false` for:
+      - Data analysis, calculations, and internal processing
 - Specify the exact data to be collected in step's `description`. Include a `note` if necessary.
 - Prioritize depth and volume of relevant information - limited information is not acceptable.
 - Use the same language as the user to generate the plan.
@@ -157,17 +186,17 @@ Directly output the raw JSON format of `Plan` without "```json". The `Plan` inte
 
 ```ts
 interface Step {
-  need_search: boolean; // Must be explicitly set for each step
-  title: string;
+  need_search: boolean; // required!
+  title: string; // required!
   description: string; // Specify exactly what data to collect. If the user input contains a link, please retain the full Markdown format when necessary.
-  step_type: "research" | "processing"; // Indicates the nature of the step
+  step_type: "research" | "processing" | "lawyer"; // Indicates the nature of the step
 }
 
 interface Plan {
   locale: string; // e.g. "en-US" or "zh-CN", based on the user's language or specific request
-  has_enough_context: boolean;
-  thought: string;
-  title: string;
+  has_enough_context: boolean; // Whether there is sufficient context to answer the question
+  thought: string; // User's requirement repeated in your own words
+  title: string; //
   steps: Step[]; // Research & Processing steps to get more context
 }
 ```

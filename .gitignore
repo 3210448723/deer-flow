@@ -21,8 +21,14 @@ venv/
 conf.yaml
 
 .idea/
+.vscode/
 .langgraph_api/
 
 # coverage report
 coverage.xml
 coverage/
+
+# logs
+*.log
+
+cache/

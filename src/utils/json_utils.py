@@ -37,3 +37,21 @@ def repair_json_output(content: str) -> str:
         except Exception as e:
             logger.warning(f"JSON repair failed: {e}")
     return content
+
+
+def format_json_for_log(data, indent=2) -> str:
+    """
+    Format JSON data for logging with proper Chinese character support.
+    
+    Args:
+        data: The data to format as JSON
+        indent: Indentation level
+    
+    Returns:
+        str: Formatted JSON string with Chinese characters preserved
+    """
+    try:
+        return json.dumps(data, ensure_ascii=False, indent=indent)
+    except (TypeError, ValueError) as e:
+        logger.warning(f"Failed to format data as JSON: {e}")
+        return str(data)

@@ -72,6 +72,21 @@ CURRENT_TIME: {{ CURRENT_TIME }}
    - 数学计算与分析
    - 统计计算与数据处理
 
+3. **法律相关问题处理步骤（`step_type: "lawyer"`）**（`need_search: false`）- **所有法律问题必须使用**：
+   - **优先级规则**：任何涉及法律事务的问题都必须使用 `step_type: "lawyer"` 而不是 "research"
+   - 法律案件、法院信息、判决书和案件记录
+   - 公司注册、营业执照和企业法律地位
+   - 律师事务所信息、律师资质和法律服务提供者
+   - 法律先例、法规、合规和法定信息
+   - 法院程序、诉讼详情和司法判决
+   - 法律实体验证和企业法律关系
+   - 借助工具，使用名称、案号、统一社会信用代码等字段获取：
+     - 公司信息、律所信息、法院信息
+     - 案件审理信息、司法系统信息
+     - 企业法律状态、法律实体信息
+   - 任何涉及法律数据库、司法系统或法律专业知识的任务
+   - **重要提醒**：法律调研应始终使用专门的法律工具，而非一般网页搜索
+
 ## 排除项
 
 - **调研步骤中不得直接计算**：
@@ -144,8 +159,21 @@ CURRENT_TIME: {{ CURRENT_TIME }}
   - 确保每一步内容充实，涵盖相关信息类别
   - 在{{ max_step_num }}步限制内兼顾广度与深度
   - 对每一步，仔细评估是否需要网页检索：
-    - 外部调研与数据收集：`need_search: true`
-    - 内部数据处理：`need_search: false`
+    - **法律任务**（最高优先级）：使用 `step_type: "lawyer"` 并设置 `need_search: false`：
+      - **任何涉及法律事务、法院、案件、律师事务所或法律实体的问题**
+      - 关于法院案件、法律程序或司法判决的查询
+      - 公司法律信息、注册或企业法律地位
+      - 律师事务所详情、律师信息或法律服务提供者
+      - 法律先例、法规、合规或法定事务
+      - 需要法律数据库或专门法律工具的任务
+      - 通过法律标识符查找信息（案件编号、社会信用代码等）
+      - **规则**：如果问题包含任何法律组件，使用"lawyer"类型，而非"research"
+    - **调研任务**：使用 `step_type: "research"` 并设置 `need_search: true`：
+      - 一般网页搜索和信息收集（仅限非法律主题）
+      - 市场调研、新闻和公共信息（仅限非法律主题）
+      - **排除项**：不要用于法律事务 - 应使用"lawyer"类型
+    - **数据处理**：使用 `step_type: "processing"` 并设置 `need_search: false`：
+      - 数据分析、计算和内部处理
 - 在每一步的`description`中明确说明需收集的具体数据。如有必要，添加`note`。
 - 优先保证信息的深度和体量——信息有限不可接受。
 - 生成计划时请使用与用户相同的语言。
@@ -157,10 +185,10 @@ CURRENT_TIME: {{ CURRENT_TIME }}
 
 ```ts
 interface Step {
-  need_search: boolean; // 每一步必须明确设置
-  title: string;
+  need_search: boolean; // 必需字段！
+  title: string; // 必需字段！
   description: string; // 明确说明需收集哪些数据。如用户输入包含链接，请保留完整Markdown格式。
-  step_type: "research" | "processing"; // 标明步骤性质
+  step_type: "research" | "processing" | "lawyer"; // 标明步骤性质
 }
 
 interface Plan {
@@ -169,21 +197,6 @@ interface Plan {
   thought: string;
   title: string;
   steps: Step[]; // 获取更多上下文的调研与处理步骤
-}
-```
-
-# 示例
-
-```json
-{
-  "title": "查找相关文献",
-  "description": "检索并总结XXX领域的最新研究进展",
-  "step_type": "research"
-},
-{
-  "title": "用Python处理数据",
-  "description": "对收集到的数据进行清洗和统计分析",
-  "step_type": "processing"
 }
 ```
 

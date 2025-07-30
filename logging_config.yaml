@@ -1,0 +1,45 @@
+version: 1
+disable_existing_loggers: False
+formatters:
+  default:
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: default
+    level: INFO
+    stream: ext://sys.stdout
+  file:
+    class: logging.FileHandler
+    formatter: default
+    level: INFO
+    filename: logs/uvicorn.log
+    encoding: utf-8
+loggers:
+  uvicorn:
+    handlers: [console, file]
+    level: INFO
+    propagate: false
+  uvicorn.error:
+    handlers: [console, file]
+    level: INFO
+    propagate: false
+  uvicorn.access:
+    handlers: [console, file]
+    level: INFO
+    propagate: false
+  src.tools.decorators:
+    handlers: [console, file]
+    level: INFO
+    propagate: false
+  src.graph.nodes:
+    handlers: [console, file]
+    level: INFO
+    propagate: false
+  __main__:
+    handlers: [console, file]
+    level: INFO
+    propagate: false
+root:
+  handlers: [console, file]
+  level: INFO

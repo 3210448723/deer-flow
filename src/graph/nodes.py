@@ -23,6 +23,7 @@ from src.tools import (
     get_web_search_tool,
     get_retriever_tool,
     python_repl_tool,
+    get_lawyer_tools,
 )
 
 from src.config.agents import AGENT_LLM_MAP
@@ -30,12 +31,41 @@ from src.config.configuration import Configuration
 from src.llms.llm import get_llm_by_type
 from src.prompts.planner_model import Plan
 from src.prompts.template import apply_prompt_template
-from src.utils.json_utils import repair_json_output
+from src.utils.json_utils import repair_json_output, format_json_for_log
 
 from .types import State
 from ..config import SELECTED_SEARCH_ENGINE, SearchEngine
 
 logger = logging.getLogger(__name__)
+
+
+def _attempt_json_parse_with_retry(
+    full_response: str, plan_iterations: int, configurable: Configuration
+) -> tuple[dict | None, bool]:
+    """
+    尝试解析JSON计划，返回解析结果和是否应该重试。
+    
+    Args:
+        full_response: LLM的完整响应
+        plan_iterations: 当前计划迭代数
+        configurable: 配置对象
+        
+    Returns:
+        tuple: (解析的计划字典或None, 是否应该重试)
+    """
+    try:
+        curr_plan = json.loads(repair_json_output(full_response))
+        return curr_plan, False
+    except json.JSONDecodeError as e:
+        logger.warning(f"JSON解析失败: {e}")
+        logger.debug(f"原始响应: {full_response}")
+        
+        # 如果超过了最大重试次数或已有计划迭代，则不再重试
+        if plan_iterations > 0:
+            logger.info("已有计划迭代，不再重试JSON解析")
+            return None, False
+            
+        return None, True
 
 
 @tool
@@ -94,28 +124,58 @@ def background_investigation_node(state: State, config: RunnableConfig):
 # 输出：Command，指示下一个节点（human_feedback或reporter）
 def planner_node(
     state: State, config: RunnableConfig
-) -> Command[Literal["human_feedback", "reporter"]]:
+) -> Command[Literal["human_feedback", "reporter", "planner", "__end__"]]:
     """Planner node that generate the full plan."""
     # 中文注释：该节点负责根据当前状态和配置，生成研究计划，并根据计划内容决定后续流程。
     logger.info("Planner generating full plan")
     configurable = Configuration.from_runnable_config(config)
-    plan_iterations = state["plan_iterations"] if state.get("plan_iterations", 0) else 0
+    plan_iterations = state.get("plan_iterations", 0)
+    format_retry_count = state.get("format_retry_count", 0)
+    
+    # 超过最大规划轮数，直接跳转到reporter节点
+    if plan_iterations >= configurable.max_plan_iterations:
+        return Command(goto="reporter")
+    
+    # 超过最大重试次数，直接跳转到reporter或human_feedback
+    if format_retry_count >= configurable.max_retry_attempts:
+        logger.warning(f"JSON格式重试次数已达上限 ({configurable.max_retry_attempts})，停止重试")
+        if plan_iterations > 0:
+            return Command(goto="reporter")
+        else:
+            return Command(goto="__end__")
+    
     messages = apply_prompt_template("planner", state, configurable)
 
     # 如果启用背景调研且有结果，将其加入消息上下文
     if state.get("enable_background_investigation") and state.get(
         "background_investigation_results"
     ):
+        background_results = state.get("background_investigation_results", "")
         messages += [
             {
                 "role": "user",
                 "content": (
                     "background investigation results of user query:\n"
-                    + state["background_investigation_results"]
+                    + background_results
                     + "\n"
                 ),
             }
         ]
+
+    # 添加重试提示（如果这是重试）
+    if format_retry_count > 0:
+        retry_message = f"""
+IMPORTANT: This is retry attempt {format_retry_count}/{configurable.max_retry_attempts} due to JSON format errors.
+Please ensure your response is valid JSON format. Pay special attention to:
+1. Use double quotes for all strings
+2. Escape special characters properly
+3. Ensure proper nesting and bracket matching
+4. Follow the exact schema required for the Plan model
+        """
+        messages.append({
+            "role": "user", 
+            "content": retry_message
+        })
 
     # 根据配置选择不同的LLM类型
     if configurable.enable_deep_thinking:
@@ -128,48 +188,85 @@ def planner_node(
     else:
         llm = get_llm_by_type(AGENT_LLM_MAP["planner"])
 
-    # 超过最大规划轮数，直接跳转到reporter节点
-    if plan_iterations >= configurable.max_plan_iterations:
-        return Command(goto="reporter")
-
     full_response = ""
     # basic模式下直接invoke，否则采用流式输出
     if AGENT_LLM_MAP["planner"] == "basic" and not configurable.enable_deep_thinking:
         response = llm.invoke(messages)
-        full_response = response.model_dump_json(indent=4, exclude_none=True)
+        if hasattr(response, 'model_dump_json'):
+            full_response = response.model_dump_json(indent=4, exclude_none=True)
+        else:
+            full_response = str(response)
     else:
         response = llm.stream(messages)
         for chunk in response:
-            full_response += chunk.content
-    logger.debug(f"Current state messages: {state['messages']}")
-    logger.info(f"Planner response: {full_response}")
+            if hasattr(chunk, 'content'):
+                full_response += chunk.content
+            else:
+                full_response += str(chunk)
+    
+    logger.debug(f"Current state messages: {state.get('messages', [])}")
+    logger.info(f"Planner response: \n{full_response}")
 
-    # 尝试解析为JSON计划
-    try:
-        curr_plan = json.loads(repair_json_output(full_response))
-    except json.JSONDecodeError:
-        logger.warning("Planner response is not a valid JSON")
-        if plan_iterations > 0:
-            return Command(goto="reporter")
+    # 尝试解析为JSON计划，并处理重试逻辑
+    curr_plan, should_retry = _attempt_json_parse_with_retry(
+        full_response, plan_iterations, configurable
+    )
+    
+    if curr_plan is None:
+        if should_retry and format_retry_count < configurable.max_retry_attempts:
+            # 递增重试计数并重新执行planner节点
+            logger.info(f"JSON解析失败，开始第 {format_retry_count + 1} 次重试")
+            return Command(
+                update={
+                    "format_retry_count": format_retry_count + 1,
+                },
+                goto="planner"
+            )
         else:
-            return Command(goto="__end__")
+            # 重试次数用尽或不应重试，进入兜底逻辑
+            logger.error("JSON解析失败且无法重试，进入兜底流程")
+            if plan_iterations > 0:
+                return Command(goto="reporter")
+            else:
+                return Command(goto="__end__")
+    
+    # 重置重试计数器（成功解析）
+    update_data = {
+        "messages": [AIMessage(content=full_response, name="planner")],
+        "format_retry_count": 0,  # 重置重试计数器
+    }
+    
     # 如果计划已具备足够上下文，直接进入reporter
     if curr_plan.get("has_enough_context"):
         logger.info("Planner response has enough context.")
-        new_plan = Plan.model_validate(curr_plan)
-        return Command(
-            update={
-                "messages": [AIMessage(content=full_response, name="planner")],
-                "current_plan": new_plan,
-            },
-            goto="reporter",
-        )
+        try:
+            new_plan = Plan.model_validate(curr_plan)
+            update_data["current_plan"] = new_plan
+            return Command(
+                update=update_data,
+                goto="reporter",
+            )
+        except Exception as e:
+            logger.error(f"Failed to validate plan model: {e}")
+            logger.error(f"Plan data: {format_json_for_log(curr_plan)}")
+            # 验证失败，尝试重试
+            if format_retry_count < configurable.max_retry_attempts:
+                logger.info(f"Plan验证失败，开始第 {format_retry_count + 1} 次重试")
+                return Command(
+                    update={
+                        "format_retry_count": format_retry_count + 1,
+                    },
+                    goto="planner"
+                )
+            elif plan_iterations > 0:
+                return Command(goto="reporter")
+            else:
+                return Command(goto="__end__")
+    
     # 否则进入人工反馈环节
+    update_data["current_plan"] = full_response
     return Command(
-        update={
-            "messages": [AIMessage(content=full_response, name="planner")],
-            "current_plan": full_response,
-        },
+        update=update_data,
         goto="human_feedback",
     )
 
@@ -197,6 +294,7 @@ def human_feedback_node(
                     "messages": [
                         HumanMessage(content=feedback, name="feedback"),
                     ],
+                    "format_retry_count": 0,  # 重置重试计数器
                 },
                 goto="planner",
             )
@@ -224,14 +322,24 @@ def human_feedback_node(
         else:
             return Command(goto="__end__")
 
-    return Command(
-        update={
-            "current_plan": Plan.model_validate(new_plan),
-            "plan_iterations": plan_iterations,
-            "locale": new_plan["locale"],
-        },
-        goto=goto,
-    )
+    try:
+        validated_plan = Plan.model_validate(new_plan)
+        return Command(
+            update={
+                "current_plan": validated_plan,
+                "plan_iterations": plan_iterations,
+                "locale": new_plan["locale"],
+                "format_retry_count": 0,  # 重置重试计数器
+            },
+            goto=goto,
+        )
+    except Exception as e:
+        logger.error(f"Failed to validate plan model in human_feedback_node: {e}")
+        logger.error(f"Plan data: {format_json_for_log(new_plan)}")
+        if plan_iterations > 0:
+            return Command(goto="reporter")
+        else:
+            return Command(goto="__end__")
 
 
 # 协调节点：与用户沟通，决定是否进入规划或背景调研
@@ -481,7 +589,7 @@ async def _setup_and_execute_agent_step(
     Args:
         state: The current state
         config: The runnable config
-        agent_type: The type of agent ("researcher" or "coder")
+        agent_type: The type of agent ("researcher" "coder" or "lawyer")
         default_tools: The default tools to add to the agent
 
     Returns:
@@ -547,6 +655,16 @@ async def researcher_node(
         tools,
     )
 
+async def lawyer_node(
+    state: State, config: RunnableConfig
+) -> Command[Literal["research_team"]]:
+    """Lawyer node that do legal research"""
+    logger.info("Lawyer node is researching.")
+    tools = get_lawyer_tools()
+    # 向state中注入法律相关的工具和few-shot示例
+    return await _setup_and_execute_agent_step(
+        state, config, "lawyer", tools
+    )
 
 # 程序员节点：负责代码分析任务
 # 输入：state、config

@@ -17,6 +17,7 @@ from .nodes import (
     coder_node,            # 编码员节点：执行代码处理步骤
     human_feedback_node,   # 人类反馈节点：处理用户反馈
     background_investigation_node,  # 背景调查节点：执行联网搜索
+    lawyer_node,                  # 律师节点：执行法律任务
 )
 
 # todo 如果多智能体要加这里要改
@@ -41,15 +42,21 @@ def continue_to_running_research_team(state: State):
     # 如果所有步骤都已经执行完成，回到规划者节点创建新计划
     if all(step.execution_res for step in current_plan.steps):
         return "planner"
+    
+    incomplete_step = None
     # 遍历计划中的步骤，找到第一个未执行的步骤
     for step in current_plan.steps:
         if not step.execution_res:
+            incomplete_step = step
             break
+    if incomplete_step:
         # 根据步骤类型选择合适的执行者
-        if step.step_type and step.step_type == StepType.RESEARCH:
+        if incomplete_step.step_type and incomplete_step.step_type == StepType.RESEARCH:
             return "researcher"  # 如果是研究类型步骤，交给研究员节点
-        if step.step_type and step.step_type == StepType.PROCESSING:
+        if incomplete_step.step_type and incomplete_step.step_type == StepType.PROCESSING:
             return "coder"  # 如果是处理类型步骤，交给编码员节点
+        if incomplete_step.step_type and incomplete_step.step_type == StepType.LAWYER:
+            return "lawyer"  # 如果是发怒问题类型步骤，交给法律智能体节点
     # 默认回到规划者节点
     return "planner"
 
@@ -80,6 +87,7 @@ def _build_base_graph():
     builder.add_node("research_team", research_team_node)  # 研究团队管理节点
     builder.add_node("researcher", researcher_node)  # 执行研究任务的节点
     builder.add_node("coder", coder_node)  # 执行代码处理任务的节点
+    builder.add_node("lawyer", lawyer_node)  # 执行法律任务的节点
     # Todo: 数据分析智能体、安全监控智能体 - 未来可能添加的节点
 
     # 添加人类反馈节点，用于处理用户输入
@@ -92,7 +100,7 @@ def _build_base_graph():
     builder.add_conditional_edges(
         "research_team",
         continue_to_running_research_team,
-        ["planner", "researcher", "coder"],
+        ["planner", "researcher", "coder", "lawyer"],
     )
 
     # 添加从报告者到结束的边，表示流程结束

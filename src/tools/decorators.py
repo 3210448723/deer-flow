@@ -79,3 +79,18 @@ def create_logged_tool(base_tool_class: Type[T]) -> Type[T]:
     # Set a more descriptive name for the class
     LoggedTool.__name__ = f"Logged{base_tool_class.__name__}"
     return LoggedTool
+
+def exception_handler(func: Callable) -> Callable:
+    """
+    A decorator that handles exceptions and logs them.
+    """
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_msg = f"invoke {func.__name__} failed, Error: {repr(e)}"
+            logger.error(error_msg)
+            # 返回有意义的错误信息而不是None
+            return {"error": error_msg, "function": func.__name__}
+    return wrapper

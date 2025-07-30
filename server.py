@@ -97,6 +97,7 @@ if __name__ == "__main__":
             port=args.port,     # 绑定端口
             reload=reload,      # 是否启用自动重载
             log_level=args.log_level,  # 日志级别
+            log_config="logging_config.yaml",  # 日志配置
         )
         logger.setLevel(args.log_level.upper())  # 设置日志级别
     except Exception as e:

@@ -21,7 +21,8 @@ class Configuration:
     max_plan_iterations: int = 1  # Maximum number of plan iterations
     max_step_num: int = 3  # Maximum number of steps in a plan
     max_search_results: int = 3  # Maximum number of search results
-    mcp_settings: dict = None  # MCP settings, including dynamic loaded tools
+    max_retry_attempts: int = 3  # Maximum number of retry attempts for JSON format errors
+    mcp_settings: Optional[dict] = None  # MCP settings, including dynamic loaded tools
     report_style: str = ReportStyle.ACADEMIC.value  # Report style
     enable_deep_thinking: bool = False  # Whether to enable deep thinking
 

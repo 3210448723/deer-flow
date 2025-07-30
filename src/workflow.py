@@ -100,3 +100,43 @@ async def run_agent_workflow_async(
 
 if __name__ == "__main__":
     print(graph.get_graph(xray=True).draw_mermaid())
+# ```mermaid
+# config:
+#   flowchart:
+#     curve: linear
+# ---
+# graph TD;
+#         __start__([<p>__start__</p>]):::first
+#         coordinator(coordinator)
+#         background_investigator(background_investigator)
+#         planner(planner)
+#         reporter(reporter)
+#         research_team(research_team)
+#         researcher(researcher)
+#         coder(coder)
+#         lawyer(lawyer)
+#         human_feedback(human_feedback)
+#         __end__([<p>__end__</p>]):::last
+#         __start__ --> coordinator;
+#         background_investigator --> planner;
+#         coder -.-> research_team;
+#         coordinator -.-> __end__;
+#         coordinator -.-> background_investigator;
+#         coordinator -.-> planner;
+#         human_feedback -.-> __end__;
+#         human_feedback -.-> planner;
+#         human_feedback -.-> reporter;
+#         human_feedback -.-> research_team;
+#         lawyer -.-> research_team;
+#         planner -.-> human_feedback;
+#         planner -.-> reporter;
+#         research_team -.-> coder;
+#         research_team -.-> lawyer;
+#         research_team -.-> planner;
+#         research_team -.-> researcher;
+#         researcher -.-> research_team;
+#         reporter --> __end__;
+#         classDef default fill:#f2f0ff,line-height:1.2
+#         classDef first fill-opacity:0
+#         classDef last fill:#bfb6fc
+# ```

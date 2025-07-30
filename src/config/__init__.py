@@ -34,6 +34,17 @@ TEAM_MEMBER_CONFIGRATIONS = {
         ),
         "is_optional": True,
     },
+    "lawyer": {
+        "name": "lawyer",
+        "desc": (
+            "Responsible for legal research and analysis, handling legal tasks"
+        ),
+        "desc_for_llm": (
+            "Uses legal databases and web crawlers to gather information from the internet. "
+            "Outputs a Markdown report summarizing findings. Lawyer can not do math or programming."
+        ),
+        "is_optional": True,
+    }
 }
 
 TEAM_MEMBERS = list(TEAM_MEMBER_CONFIGRATIONS.keys())
