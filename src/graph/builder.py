@@ -38,19 +38,24 @@ def continue_to_running_research_team(state: State):
     # 如果没有计划或计划没有步骤，回到规划者节点
     if not current_plan or not current_plan.steps:
         return "planner"
-    # 如果所有步骤都已经执行完成，回到规划者节点创建新计划
+
     if all(step.execution_res for step in current_plan.steps):
         return "planner"
-    # 遍历计划中的步骤，找到第一个未执行的步骤
+
+    # Find first incomplete step
+    incomplete_step = None
     for step in current_plan.steps:
         if not step.execution_res:
+            incomplete_step = step
             break
-        # 根据步骤类型选择合适的执行者
-        if step.step_type and step.step_type == StepType.RESEARCH:
-            return "researcher"  # 如果是研究类型步骤，交给研究员节点
-        if step.step_type and step.step_type == StepType.PROCESSING:
-            return "coder"  # 如果是处理类型步骤，交给编码员节点
-    # 默认回到规划者节点
+
+    if not incomplete_step:
+        return "planner"
+
+    if incomplete_step.step_type == StepType.RESEARCH:
+        return "researcher"
+    if incomplete_step.step_type == StepType.PROCESSING:
+        return "coder"
     return "planner"
 
 

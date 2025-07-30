@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import json
-import pytest
 from unittest.mock import patch, MagicMock
-import uuid
 import base64
 
 from src.tools.tts import VolcengineTTS
@@ -244,5 +242,6 @@ class TestVolcengineTTS:
         result = tts.text_to_speech("Hello, world!")
         # Verify the result
         assert result["success"] is False
-        assert result["error"] == "Network error"
+        # The TTS error is caught and returned as a string
+        assert result["error"] == "TTS API call error"
         assert result["audio_data"] is None

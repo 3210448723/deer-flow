@@ -153,8 +153,7 @@ def planner_node(
             return Command(goto="reporter")
         else:
             return Command(goto="__end__")
-    # 如果计划已具备足够上下文，直接进入reporter
-    if curr_plan.get("has_enough_context"):
+    if isinstance(curr_plan, dict) and curr_plan.get("has_enough_context"):
         logger.info("Planner response has enough context.")
         new_plan = Plan.model_validate(curr_plan)
         return Command(
@@ -215,11 +214,9 @@ def human_feedback_node(
         plan_iterations += 1
         # 解析计划
         new_plan = json.loads(current_plan)
-        if new_plan["has_enough_context"]:
-            goto = "reporter"
     except json.JSONDecodeError:
         logger.warning("Planner response is not a valid JSON")
-        if plan_iterations > 0:
+        if plan_iterations > 1:  # the plan_iterations is increased before this check
             return Command(goto="reporter")
         else:
             return Command(goto="__end__")
@@ -279,9 +276,12 @@ def coordinator_node(
             "Coordinator response contains no tool calls. Terminating workflow execution."
         )
         logger.debug(f"Coordinator response: {response}")
-
+    messages = state.get("messages", [])
+    if response.content:
+        messages.append(HumanMessage(content=response.content, name="coordinator"))
     return Command(
         update={
+            "messages": messages,
             "locale": locale,
             "research_topic": research_topic,
             "resources": configurable.resources,
@@ -353,6 +353,7 @@ async def _execute_agent_step(
     """Helper function to execute a step using the specified agent."""
     # 中文注释：该函数负责执行当前计划中的一个未完成步骤，并将结果写入state
     current_plan = state.get("current_plan")
+    plan_title = current_plan.title
     observations = state.get("observations", [])
 
     # 查找第一个未执行的步骤
@@ -374,16 +375,16 @@ async def _execute_agent_step(
     # 格式化已完成步骤信息，便于agent参考
     completed_steps_info = ""
     if completed_steps:
-        completed_steps_info = "# Existing Research Findings\n\n"
+        completed_steps_info = "# Completed Research Steps\n\n"
         for i, step in enumerate(completed_steps):
-            completed_steps_info += f"## Existing Finding {i + 1}: {step.title}\n\n"
+            completed_steps_info += f"## Completed Step {i + 1}: {step.title}\n\n"
             completed_steps_info += f"<finding>\n{step.execution_res}\n</finding>\n\n"
 
     # 构造agent输入，包含当前任务和已完成任务
     agent_input = {
         "messages": [
             HumanMessage(
-                content=f"{completed_steps_info}# Current Task\n\n## Title\n\n{current_step.title}\n\n## Description\n\n{current_step.description}\n\n## Locale\n\n{state.get('locale', 'en-US')}"
+                content=f"# Research Topic\n\n{plan_title}\n\n{completed_steps_info}# Current Step\n\n## Title\n\n{current_step.title}\n\n## Description\n\n{current_step.description}\n\n## Locale\n\n{state.get('locale', 'en-US')}"
             )
         ]
     }
