@@ -11,7 +11,7 @@ cp conf.yaml.example conf.yaml
 
 ## Which models does DeerFlow support?
 
-In DeerFlow, currently we only support non-reasoning models, which means models like OpenAI's o1/o3 or DeepSeek's R1 are not supported yet, but we will add support for them in the future.
+In DeerFlow, we currently only support non-reasoning models. This means models like OpenAI's o1/o3 or DeepSeek's R1 are not supported yet, but we plan to add support for them in the future. Additionally, all Gemma-3 models are currently unsupported due to the lack of tool usage capabilities.
 
 ### Supported Models
 
@@ -58,6 +58,21 @@ BASIC_MODEL:
   api_key: YOUR_API_KEY
 ```
 
+### How to use models with self-signed SSL certificates?
+
+If your LLM server uses self-signed SSL certificates, you can disable SSL certificate verification by adding the `verify_ssl: false` parameter to your model configuration:
+
+```yaml
+BASIC_MODEL:
+  base_url: "https://your-llm-server.com/api/v1"
+  model: "your-model-name"
+  api_key: YOUR_API_KEY
+  verify_ssl: false  # Disable SSL certificate verification for self-signed certificates
+```
+
+> [!WARNING]
+> Disabling SSL certificate verification reduces security and should only be used in development environments or when you trust the LLM server. In production environments, it's recommended to use properly signed SSL certificates.
+
 ### How to use Ollama models?
 
 DeerFlow supports the integration of Ollama models. You can refer to [litellm Ollama](https://docs.litellm.ai/docs/providers/ollama). <br>
@@ -90,13 +105,38 @@ BASIC_MODEL:
 
 Note: The available models and their exact names may change over time. Please verify the currently available models and their correct identifiers in [OpenRouter's official documentation](https://openrouter.ai/docs).
 
-### How to use Azure models?
 
-DeerFlow supports the integration of Azure models. You can refer to [litellm Azure](https://docs.litellm.ai/docs/providers/azure). Configuration example of `conf.yaml`:
+### How to use Azure OpenAI chat models?
+
+DeerFlow supports the integration of Azure OpenAI chat models. You can refer to [AzureChatOpenAI](https://python.langchain.com/api_reference/openai/chat_models/langchain_openai.chat_models.azure.AzureChatOpenAI.html). Configuration example of `conf.yaml`:
 ```yaml
 BASIC_MODEL:
   model: "azure/gpt-4o-2024-08-06"
-  api_base: $AZURE_API_BASE
-  api_version: $AZURE_API_VERSION
-  api_key: $AZURE_API_KEY
+  azure_endpoint: $AZURE_OPENAI_ENDPOINT
+  api_version: $OPENAI_API_VERSION
+  api_key: $AZURE_OPENAI_API_KEY
 ```
+
+## About Search Engine
+
+### How to control search domains for Tavily?
+
+DeerFlow allows you to control which domains are included or excluded in Tavily search results through the configuration file. This helps improve search result quality and reduce hallucinations by focusing on trusted sources.
+
+`Tips`: it only supports Tavily currently. 
+
+You can configure domain filtering in your `conf.yaml` file as follows:
+
+```yaml
+SEARCH_ENGINE:
+  engine: tavily
+  # Only include results from these domains (whitelist)
+  include_domains:
+    - trusted-news.com
+    - gov.org
+    - reliable-source.edu
+  # Exclude results from these domains (blacklist)
+  exclude_domains:
+    - unreliable-site.com
+    - spam-domain.net
+

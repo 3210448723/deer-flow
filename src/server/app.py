@@ -15,16 +15,18 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
-from langchain_core.messages import AIMessageChunk, ToolMessage, BaseMessage
+from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
 from langgraph.types import Command
 
+from src.config.configuration import get_recursion_limit
 from src.config.report_style import ReportStyle
 from src.config.tools import SELECTED_RAG_PROVIDER
 from src.graph.builder import build_graph_with_memory
+from src.llms.llm import get_configured_llm_models
 from src.podcast.graph.builder import build_graph as build_podcast_graph
 from src.ppt.graph.builder import build_graph as build_ppt_graph
-from src.prose.graph.builder import build_graph as build_prose_graph
 from src.prompt_enhancer.graph.builder import build_graph as build_prompt_enhancer_graph
+from src.prose.graph.builder import build_graph as build_prose_graph
 from src.rag.builder import build_retriever
 from src.rag.retriever import Resource
 from src.server.chat_request import (
@@ -35,6 +37,7 @@ from src.server.chat_request import (
     GenerateProseRequest,
     TTSRequest,
 )
+from src.server.config_request import ConfigResponse
 from src.server.mcp_request import MCPServerMetadataRequest, MCPServerMetadataResponse
 from src.server.mcp_utils import load_mcp_tools
 from src.server.rag_request import (
@@ -42,8 +45,6 @@ from src.server.rag_request import (
     RAGResourceRequest,
     RAGResourcesResponse,
 )
-from src.server.config_request import ConfigResponse
-from src.llms.llm import get_configured_llm_models
 from src.tools import VolcengineTTS
 
 logger = logging.getLogger(__name__)
@@ -57,13 +58,20 @@ app = FastAPI(
     version="0.1.0",  # 版本号
 )
 
-# 添加CORS中间件，允许所有来源、方法和头部，便于前端跨域访问
+# Add CORS middleware
+# It's recommended to load the allowed origins from an environment variable
+# for better security and flexibility across different environments.
+allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",")]
+
+logger.info(f"Allowed origins: {allowed_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源
+    allow_origins=allowed_origins,  # Restrict to specific origins
     allow_credentials=True,
-    allow_methods=["*"],  # 允许所有方法
-    allow_headers=["*"],  # 允许所有头部
+    allow_methods=["GET", "POST", "OPTIONS"],  # Use the configured list of methods
+    allow_headers=["*"],  # Now allow all headers, but can be restricted further
 )
 
 # 构建主工作流图（带记忆能力）
@@ -74,6 +82,20 @@ graph = build_graph_with_memory()
 # =====================
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
+    # Check if MCP server configuration is enabled
+    mcp_enabled = os.getenv("ENABLE_MCP_SERVER_CONFIGURATION", "false").lower() in [
+        "true",
+        "1",
+        "yes",
+    ]
+
+    # Validate MCP settings if provided
+    if request.mcp_settings and not mcp_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="MCP server configuration is disabled. Set ENABLE_MCP_SERVER_CONFIGURATION=true to enable MCP features.",
+        )
+
     thread_id = request.thread_id
     if thread_id == "__default__":
         thread_id = str(uuid4())  # 若未指定线程ID，则自动生成
@@ -87,7 +109,7 @@ async def chat_stream(request: ChatRequest):
             request.max_search_results,
             request.auto_accepted_plan,
             request.interrupt_feedback,
-            request.mcp_settings,
+            request.mcp_settings if mcp_enabled else {},
             request.enable_background_investigation,
             request.report_style,
             request.enable_deep_thinking,
@@ -140,6 +162,7 @@ async def _astream_workflow_generator(
             "mcp_settings": mcp_settings,
             "report_style": report_style.value,
             "enable_deep_thinking": enable_deep_thinking,
+            "recursion_limit": get_recursion_limit(),
         },
         stream_mode=["messages", "updates"],
         subgraphs=True,
@@ -166,9 +189,13 @@ async def _astream_workflow_generator(
         message_chunk, message_metadata = cast(
             tuple[BaseMessage, dict[str, any]], event_data
         )
+        # Handle empty agent tuple gracefully
+        agent_name = "planner"
+        if agent and len(agent) > 0:
+            agent_name = agent[0].split(":")[0] if ":" in agent[0] else agent[0]
         event_stream_message: dict[str, any] = {
             "thread_id": thread_id,
-            "agent": agent[0].split(":")[0],
+            "agent": agent_name,
             "id": message_chunk.id,
             "role": "assistant",
             "content": message_chunk.content,
@@ -218,18 +245,17 @@ def _make_event(event_type: str, data: dict[str, any]):
 # =====================
 @app.post("/api/tts")
 async def text_to_speech(request: TTSRequest):
-    """使用volcengine TTS API将文本转为语音。"""
+    """Convert text to speech using volcengine TTS API."""
+    app_id = os.getenv("VOLCENGINE_TTS_APPID", "")
+    if not app_id:
+        raise HTTPException(status_code=400, detail="VOLCENGINE_TTS_APPID is not set")
+    access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN", "")
+    if not access_token:
+        raise HTTPException(
+            status_code=400, detail="VOLCENGINE_TTS_ACCESS_TOKEN is not set"
+        )
+
     try:
-        app_id = os.getenv("VOLCENGINE_TTS_APPID", "")
-        if not app_id:
-            raise HTTPException(
-                status_code=400, detail="VOLCENGINE_TTS_APPID is not set"
-            )
-        access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN", "")
-        if not access_token:
-            raise HTTPException(
-                status_code=400, detail="VOLCENGINE_TTS_ACCESS_TOKEN is not set"
-            )
         cluster = os.getenv("VOLCENGINE_TTS_CLUSTER", "volcano_tts")
         voice_type = os.getenv("VOLCENGINE_TTS_VOICE_TYPE", "BV700_V2_streaming")
 
@@ -267,6 +293,7 @@ async def text_to_speech(request: TTSRequest):
                 )
             },
         )
+
     except Exception as e:
         logger.exception(f"Error in TTS endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
@@ -354,13 +381,9 @@ async def enhance_prompt(request: EnhancePromptRequest):
                     "POPULAR_SCIENCE": ReportStyle.POPULAR_SCIENCE,
                     "NEWS": ReportStyle.NEWS,
                     "SOCIAL_MEDIA": ReportStyle.SOCIAL_MEDIA,
-                    "academic": ReportStyle.ACADEMIC,
-                    "popular_science": ReportStyle.POPULAR_SCIENCE,
-                    "news": ReportStyle.NEWS,
-                    "social_media": ReportStyle.SOCIAL_MEDIA,
                 }
                 report_style = style_mapping.get(
-                    request.report_style, ReportStyle.ACADEMIC
+                    request.report_style.upper(), ReportStyle.ACADEMIC
                 )
             except Exception:
                 # 无效风格，默认学术风格
@@ -386,7 +409,18 @@ async def enhance_prompt(request: EnhancePromptRequest):
 # =====================
 @app.post("/api/mcp/server/metadata", response_model=MCPServerMetadataResponse)
 async def mcp_server_metadata(request: MCPServerMetadataRequest):
-    """获取MCP服务的元数据信息。"""
+    """Get information about an MCP server."""
+    # Check if MCP server configuration is enabled
+    if os.getenv("ENABLE_MCP_SERVER_CONFIGURATION", "false").lower() not in [
+        "true",
+        "1",
+        "yes",
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail="MCP server configuration is disabled. Set ENABLE_MCP_SERVER_CONFIGURATION=true to enable MCP features.",
+        )
+
     try:
         # 设置默认超时时间
         timeout = 300  # 默认300秒
@@ -417,10 +451,8 @@ async def mcp_server_metadata(request: MCPServerMetadataRequest):
 
         return response
     except Exception as e:
-        if not isinstance(e, HTTPException):
-            logger.exception(f"Error in MCP server metadata endpoint: {str(e)}")
-            raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
-        raise
+        logger.exception(f"Error in MCP server metadata endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
 
 # =====================
 # RAG配置获取接口

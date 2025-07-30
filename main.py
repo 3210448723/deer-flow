@@ -149,7 +149,11 @@ if __name__ == "__main__":
         if args.query:
             user_query = " ".join(args.query)
         else:
-            user_query = input("请输入您的问题 (Enter your query): ")
+            # Loop until user provides non-empty input
+            while True:
+                user_query = input("Enter your query: ")
+                if user_query is not None and user_query != "":
+                    break
 
         # 使用提供的参数运行智能体工作流
         ask(

@@ -39,12 +39,12 @@ def continue_to_running_research_team(state: State):
     # 如果没有计划或计划没有步骤，回到规划者节点
     if not current_plan or not current_plan.steps:
         return "planner"
-    # 如果所有步骤都已经执行完成，回到规划者节点创建新计划
+
     if all(step.execution_res for step in current_plan.steps):
         return "planner"
-    
+
+    # Find first incomplete step
     incomplete_step = None
-    # 遍历计划中的步骤，找到第一个未执行的步骤
     for step in current_plan.steps:
         if not step.execution_res:
             incomplete_step = step
