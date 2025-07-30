@@ -56,6 +56,7 @@ class Configuration:
     max_step_num: int = 3  # Maximum number of steps in a plan
     max_search_results: int = 3  # Maximum number of search results
     max_retry_attempts: int = 3  # Maximum number of retry attempts for JSON format errors
+    # todo: 每次请求需要重置max_retry_attempts，在前端设置项中添加该字段
     mcp_settings: Optional[dict] = None  # MCP settings, including dynamic loaded tools
     report_style: str = ReportStyle.ACADEMIC.value  # Report style
     enable_deep_thinking: bool = False  # Whether to enable deep thinking

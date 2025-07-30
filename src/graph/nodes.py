@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from langchain_core.exceptions import OutputParserException
 from langgraph.types import Command, interrupt
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
@@ -37,6 +38,42 @@ from .types import State
 from ..config import SELECTED_SEARCH_ENGINE, SearchEngine
 
 logger = logging.getLogger(__name__)
+
+
+def _handle_plan_retry_logic(
+    format_retry_count: int,
+    configurable: Configuration,
+    plan_iterations: int,
+    error_reason: str = "格式错误"
+) -> Command[Literal["planner", "reporter", "human_feedback", "__end__"]]:
+    """
+    统一的计划重试逻辑处理函数
+    
+    Args:
+        format_retry_count: 当前重试次数
+        configurable: 配置对象
+        plan_iterations: 计划迭代次数
+        error_reason: 错误原因描述
+        
+    Returns:
+        Command: 指示下一步操作
+    """
+    if format_retry_count < configurable.max_retry_attempts:
+        # 可以重试
+        logger.info(f"{error_reason}，开始第 {format_retry_count + 1} 次重试")
+        return Command(
+            update={
+                "format_retry_count": format_retry_count + 1,
+            },
+            goto="planner"
+        )
+    else:
+        # 重试次数用尽，进入兜底逻辑
+        logger.error(f"{error_reason}且重试次数已达上限，进入兜底流程")
+        if plan_iterations > 0:
+            return Command(goto="reporter")
+        else:
+            return Command(goto="__end__")
 
 
 def _attempt_json_parse_with_retry(
@@ -191,11 +228,18 @@ Please ensure your response is valid JSON format. Pay special attention to:
     full_response = ""
     # basic模式下直接invoke，否则采用流式输出
     if AGENT_LLM_MAP["planner"] == "basic" and not configurable.enable_deep_thinking:
-        response = llm.invoke(messages)
-        if hasattr(response, 'model_dump_json'):
-            full_response = response.model_dump_json(indent=4, exclude_none=True)
-        else:
-            full_response = str(response)
+        try:
+            response = llm.invoke(messages)
+            if hasattr(response, 'model_dump_json'):
+                full_response = response.model_dump_json(indent=4, exclude_none=True)
+            else:
+                full_response = str(response)
+        except OutputParserException as e:
+            # LangChain内部解析失败，直接使用统一重试逻辑
+            logger.warning(f"LangChain structured output parsing failed: {e}")
+            return _handle_plan_retry_logic(
+                format_retry_count, configurable, plan_iterations, "LangChain结构化输出解析失败"
+            )
     else:
         response = llm.stream(messages)
         for chunk in response:
@@ -213,14 +257,10 @@ Please ensure your response is valid JSON format. Pay special attention to:
     )
     
     if curr_plan is None:
-        if should_retry and format_retry_count < configurable.max_retry_attempts:
-            # 递增重试计数并重新执行planner节点
-            logger.info(f"JSON解析失败，开始第 {format_retry_count + 1} 次重试")
-            return Command(
-                update={
-                    "format_retry_count": format_retry_count + 1,
-                },
-                goto="planner"
+        if should_retry:
+            # 使用统一的重试逻辑
+            return _handle_plan_retry_logic(
+                format_retry_count, configurable, plan_iterations, "JSON解析失败"
             )
         else:
             # 重试次数用尽或不应重试，进入兜底逻辑
@@ -249,19 +289,10 @@ Please ensure your response is valid JSON format. Pay special attention to:
         except Exception as e:
             logger.error(f"Failed to validate plan model: {e}")
             logger.error(f"Plan data: {format_json_for_log(curr_plan)}")
-            # 验证失败，尝试重试
-            if format_retry_count < configurable.max_retry_attempts:
-                logger.info(f"Plan验证失败，开始第 {format_retry_count + 1} 次重试")
-                return Command(
-                    update={
-                        "format_retry_count": format_retry_count + 1,
-                    },
-                    goto="planner"
-                )
-            elif plan_iterations > 0:
-                return Command(goto="reporter")
-            else:
-                return Command(goto="__end__")
+            # 验证失败，使用统一的重试逻辑
+            return _handle_plan_retry_logic(
+                format_retry_count, configurable, plan_iterations, "Plan验证失败"
+            )
     
     # 否则进入人工反馈环节
     update_data["current_plan"] = full_response
